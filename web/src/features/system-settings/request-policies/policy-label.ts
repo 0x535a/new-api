@@ -5,6 +5,45 @@ import type { TFunction } from 'i18next'
 // sources reported by the channel operations summary.
 export function policyLabel(t: TFunction, value: string): string {
   switch (value) {
+    case 'rpm_limit':
+      return t('Requests per minute limit reached')
+    case 'tpm_limit':
+      return t('Tokens per minute limit reached')
+    case 'concurrency_limit':
+      return t('Concurrent request limit reached')
+    case 'half_open_probe':
+      return t('Recovery probe already running')
+    case 'cooldown':
+      return t('Cooling down')
+    case 'account_paused':
+      return t('Account paused')
+    case 'budget_reserve':
+      return t('Budget reserve reached')
+    case 'upstream_balance':
+      return t('Upstream balance exhausted')
+    case 'invalid_credentials':
+      return t('Invalid upstream credentials')
+    case 'upstream_quota_exhausted':
+      return t('Upstream quota exhausted')
+    case 'model_unavailable':
+      return t('Model unavailable on this source')
+    case 'rate_limit':
+      return t('Upstream rate limit')
+    case 'temporary_failure':
+      return t('Temporary upstream failure')
+    case 'request_rejected':
+      return t('Request rejected by upstream')
+    case 'upstream_capacity_reserved':
+      return t('Upstream capacity reserved')
+    case 'upstream_capacity':
+      return t('Upstream capacity')
+    case 'upstream_routing':
+      return t('Upstream load balancing')
+    case 'ambiguous_media_submission':
+      return t('Submission outcome is uncertain; automatic retry stopped')
+    case 'response_already_started':
+      return t('Response already started')
+
     case 'upstream_failure':
       return t('Upstream request failed')
     case 'request_failed':

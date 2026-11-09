@@ -340,6 +340,7 @@ func migrateDB() error {
 	}
 
 	err := DB.AutoMigrate(
+		&UpstreamRoutingRecord{},
 		&Channel{},
 		&Token{},
 		&User{},

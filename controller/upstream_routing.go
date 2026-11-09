@@ -49,7 +49,7 @@ func GetUpstreamRouting(c *gin.Context) {
 	for _, p := range cfg.Models {
 		scopes[p.Model] = map[int]string{}
 		for _, s := range p.Sources {
-			scope := service.UpstreamSourceScope(s.ChannelID, p.Model)
+			scope := service.UpstreamSourceScope(s.ChannelID, service.UpstreamSourceModel(p.Model, s))
 			if _, ok := states[scope]; ok {
 				scopes[p.Model][s.ChannelID] = scope
 			}
@@ -66,7 +66,8 @@ func SaveUpstreamRouting(c *gin.Context) {
 	saved, err := model.SaveUpstreamRoutingConfig(cfg)
 	if err != nil {
 		if errors.Is(err, model.ErrUpstreamRoutingConflict) {
-			c.Status(http.StatusConflict)
+			common.ApiErrorStatus(c, http.StatusConflict, common.NewMessage(err.Error()))
+			return
 		}
 		common.ApiErrorT(c, err.Error())
 		return

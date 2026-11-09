@@ -584,6 +584,7 @@ func executeTaskSubmissionWith(
 		c.Request.Body = io.NopCloser(bodyStorage)
 
 		stage = "submit"
+		service.MarkUpstreamAttemptStarted(c)
 		result, taskErr = submit(c, relayInfo)
 		if requestErr := c.Request.Context().Err(); requestErr != nil {
 			diagnostics.cancelled("after_submit", retryParam.GetRetry()+1)
@@ -861,6 +862,9 @@ func taskSubmissionAPIError(taskErr *taskdto.TaskError) *types.NewAPIError {
 // reason is recorded in the request policy decision events of the log details.
 func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int) service.PolicyDecision {
 	if taskErr != nil && !taskErr.NoRetry && !taskErr.LocalError {
+		if service.IsUpstreamManaged(c) && taskErr.StatusCode != 429 && taskErr.StatusCode != 401 && taskErr.StatusCode != 402 && taskErr.StatusCode != 404 {
+			return service.PolicyDecision{Action: "stop", Reason: "ambiguous_media_submission", Source: "upstream_routing"}
+		}
 		if decision, handled := service.UpstreamRetryDecision(c, taskSubmissionAPIError(taskErr)); handled {
 			return decision
 		}

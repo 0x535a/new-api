@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -61,6 +62,7 @@ type UpstreamRuntime struct {
 }
 type upstreamAttempt struct {
 	ID            string
+	Sent          bool
 	Account       dto.UpstreamAccount
 	Source        dto.UpstreamSource
 	Scopes        []string
@@ -90,7 +92,7 @@ func upstreamPolicy(c *gin.Context, name string) (*upstreamRequest, error) {
 	}
 	cfg, err := model.ReadUpstreamRoutingConfig()
 	if err != nil {
-		return nil, errors.New("upstream routing state unavailable")
+		return nil, errors.New(i18n.T(c, "upstream_routing.state_unavailable"))
 	}
 	p.Config, p.Managed = cfg, cfg.Enabled
 	c.Set(upstreamRequestKey, p)
@@ -103,6 +105,13 @@ func IsUpstreamManaged(c *gin.Context) bool {
 func UpstreamSourceScope(channel int, name string) string {
 	return fmt.Sprintf("source:%d:%x", channel, sha256.Sum256([]byte(name)))
 }
+func UpstreamSourceModel(modelName string, s dto.UpstreamSource) string {
+	if s.Model != "" {
+		return s.Model
+	}
+	return modelName
+}
+
 func budgetPeriod(b dto.UpstreamBudget, now time.Time) string {
 	loc := time.UTC
 	if b.Timezone != "" {
@@ -205,11 +214,30 @@ func estimateUpstreamRequest(c *gin.Context, s dto.UpstreamSource) (int64, int64
 	return input, output, UpstreamUsage{Requests: 1, Tokens: float64(input + output), USD: s.RequestUSD + (float64(input)*s.InputUSDPerMillion+float64(output)*s.OutputUSDPerMillion)/1e6}, nil
 }
 func reserveUpstream(c *gin.Context, p *upstreamRequest, a dto.UpstreamAccount, s dto.UpstreamSource, now time.Time) error {
+	identity := UpstreamSourceModel(p.Model, s)
+	// Aliases of the same exposed source share cooldown, reservations and the
+	// strictest configured model limit, so another client name cannot evade it.
+	for _, pool := range p.Config.Models {
+		for _, other := range pool.Sources {
+			if other.ChannelID != s.ChannelID || UpstreamSourceModel(pool.Model, other) != identity {
+				continue
+			}
+			if other.Limits.RPM > 0 && (s.Limits.RPM == 0 || other.Limits.RPM < s.Limits.RPM) {
+				s.Limits.RPM = other.Limits.RPM
+			}
+			if other.Limits.TPM > 0 && (s.Limits.TPM == 0 || other.Limits.TPM < s.Limits.TPM) {
+				s.Limits.TPM = other.Limits.TPM
+			}
+			if other.Limits.Concurrency > 0 && (s.Limits.Concurrency == 0 || other.Limits.Concurrency < s.Limits.Concurrency) {
+				s.Limits.Concurrency = other.Limits.Concurrency
+			}
+		}
+	}
 	input, output, estimate, err := estimateUpstreamRequest(c, s)
 	if err != nil {
 		return err
 	}
-	at := &upstreamAttempt{ID: common.GetUUID(), Account: a, Source: s, Scopes: []string{"account:" + a.ID, UpstreamSourceScope(s.ChannelID, p.Model)}, Estimate: estimate, Input: input, Output: output, Period: budgetPeriod(a.Budget, now), Stop: make(chan struct{})}
+	at := &upstreamAttempt{ID: common.GetUUID(), Account: a, Source: s, Scopes: []string{"account:" + a.ID, UpstreamSourceScope(s.ChannelID, identity)}, Estimate: estimate, Input: input, Output: output, Period: budgetPeriod(a.Budget, now), Stop: make(chan struct{})}
 	err = model.UpdateUpstreamRoutingRecords(at.Scopes, func(rows map[string]*model.UpstreamRoutingRecord) error {
 		for i, scope := range at.Scopes {
 			state, e := decodeUpstreamState(rows[scope], now)
@@ -318,10 +346,10 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		return nil, "", false, nil
 	}
 	if p.Current != nil {
-		return forced, "", true, errors.New("previous upstream attempt is still active")
+		return forced, "", true, errors.New(i18n.T(c, "upstream_routing.active_attempt"))
 	}
 	if p.Attempts >= p.Config.MaxAttempts {
-		return nil, "", true, errors.New("upstream attempt budget exhausted")
+		return nil, "", true, errors.New(i18n.T(c, "upstream_routing.attempt_budget_exhausted"))
 	}
 	var pool *dto.UpstreamModelPool
 	for i := range p.Config.Models {
@@ -331,7 +359,7 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		}
 	}
 	if pool == nil || !pool.Enabled {
-		return nil, "", true, errors.New("model is pending upstream verification")
+		return nil, "", true, errors.New(i18n.T(c, "upstream_routing.pending_model"))
 	}
 	pinned := 0
 	if pin, ok, _ := GetChannelConstraints(c).ResolvedPin(); ok {
@@ -447,7 +475,7 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		RequestPolicy(c).AddEvent(PolicyEvent{ChannelID: candidate.channel.Id, Decision: PolicyDecision{Action: "select", Reason: "upstream_capacity_reserved", Source: "upstream_routing"}})
 		return candidate.channel, candidate.group, true, nil
 	}
-	return nil, "", true, errors.New("no verified upstream source has available capacity")
+	return nil, "", true, errors.New(i18n.T(c, "upstream_routing.capacity_unavailable"))
 }
 
 func upstreamFailure(err *types.NewAPIError) (string, bool) {
@@ -458,7 +486,7 @@ func upstreamFailure(err *types.NewAPIError) (string, bool) {
 	if err.StatusCode == 401 || strings.Contains(text, "invalid_api_key") || strings.Contains(text, "invalid api key") {
 		return "invalid_credentials", true
 	}
-	for _, hint := range []string{"insufficient_quota", "quota_exceeded", "quota exhausted", "insufficient balance", "balance is insufficient", "credit balance", "余额不足"} {
+	for _, hint := range []string{"insufficient_quota", "billing_hard_limit_reached", "quota exhausted", "insufficient balance", "balance is insufficient", "credit balance", "余额不足"} {
 		if strings.Contains(text, hint) {
 			return "upstream_quota_exhausted", true
 		}
@@ -502,6 +530,9 @@ func FinishUpstreamAttempt(c *gin.Context, apiErr *types.NewAPIError, success bo
 	p.Current = nil
 	at.Once.Do(func() { close(at.Stop) })
 	now := time.Now()
+	if !success && apiErr == nil && at.Sent && c.Request.Context().Err() == nil {
+		apiErr = types.NewErrorWithStatusCode(errors.New("upstream stream did not complete"), types.ErrorCodeBadResponse, 502)
+	}
 	reason, accountFault := upstreamFailure(apiErr)
 	input, inputOK := c.Get("upstream_usage_input")
 	output, outputOK := c.Get("upstream_usage_output")
@@ -525,7 +556,11 @@ func FinishUpstreamAttempt(c *gin.Context, apiErr *types.NewAPIError, success bo
 		actual.USD = 0
 		known = true
 	}
-	delta := UpstreamUsage{Tokens: actual.Tokens - at.Estimate.Tokens, USD: actual.USD - at.Estimate.USD}
+	if !success && apiErr == nil && !at.Sent {
+		actual = UpstreamUsage{}
+		known = true
+	}
+	delta := UpstreamUsage{Requests: actual.Requests - at.Estimate.Requests, Tokens: actual.Tokens - at.Estimate.Tokens, USD: actual.USD - at.Estimate.USD}
 	err := model.UpdateUpstreamRoutingRecords(at.Scopes, func(rows map[string]*model.UpstreamRoutingRecord) error {
 		for i, scope := range at.Scopes {
 			s, e := decodeUpstreamState(rows[scope], now)
@@ -537,6 +572,9 @@ func FinishUpstreamAttempt(c *gin.Context, apiErr *types.NewAPIError, success bo
 				s.Usage.add(delta)
 			}
 			s.Lifetime.add(delta)
+			if actual.Requests == 0 {
+				s.Events = slices.DeleteFunc(s.Events, func(e UpstreamRateEvent) bool { return e.ID == at.ID })
+			}
 			for j := range s.Events {
 				if s.Events[j].ID == at.ID {
 					s.Events[j].Tokens = int64(actual.Tokens)
@@ -601,6 +639,17 @@ func FinishUpstreamAttempt(c *gin.Context, apiErr *types.NewAPIError, success bo
 		RequestPolicy(c).AddEvent(PolicyEvent{ChannelID: at.Source.ChannelID, Decision: PolicyDecision{Action: "isolate", Reason: reason, Source: "upstream_routing"}})
 	}
 }
+
+// MarkUpstreamAttemptStarted distinguishes local validation failures from
+// ambiguous submissions that may already have incurred an upstream charge.
+func MarkUpstreamAttemptStarted(c *gin.Context) {
+	if v, ok := c.Get(upstreamRequestKey); ok {
+		if at := v.(*upstreamRequest).Current; at != nil {
+			at.Sent = true
+		}
+	}
+}
+
 func CloseUpstreamRequest(c *gin.Context) { FinishUpstreamAttempt(c, nil, false) }
 func UpstreamRetryDecision(c *gin.Context, err *types.NewAPIError) (PolicyDecision, bool) {
 	if !IsUpstreamManaged(c) {
@@ -622,7 +671,8 @@ func UpstreamRetryDecision(c *gin.Context, err *types.NewAPIError) (PolicyDecisi
 	if p.Attempts >= p.Config.MaxAttempts {
 		return stop("attempt_budget_exhausted")
 	}
-	if GetChannelConstraints(c).SuppressesRetry() || ShouldSkipRetryAfterChannelAffinityFailure(c) {
+	_, hasPin, _ := GetChannelConstraints(c).ResolvedPin()
+	if hasPin || GetChannelConstraints(c).SuppressesRetry() || ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return stop("pinned_channel")
 	}
 	if types.IsSkipRetryError(err) {
@@ -633,6 +683,41 @@ func UpstreamRetryDecision(c *gin.Context, err *types.NewAPIError) (PolicyDecisi
 		return stop("status_not_retryable")
 	}
 	return PolicyDecision{Action: "retry", Reason: reason, Source: "upstream_routing"}, true
+}
+
+// ReserveUpstreamProbe admits an administrator's explicit channel test without
+// requiring prior model verification. Tests still consume shared capacity and
+// budget, and never change the manual channel switch or verification flag.
+func ReserveUpstreamProbe(c *gin.Context, channelID int, name string) error {
+	p, err := upstreamPolicy(c, name)
+	if err != nil {
+		return err
+	}
+	if !p.Managed {
+		return nil
+	}
+	for _, a := range p.Config.Accounts {
+		if !slices.Contains(a.ChannelIDs, channelID) {
+			continue
+		}
+		source := dto.UpstreamSource{ChannelID: channelID, Weight: 1}
+		for _, pool := range p.Config.Models {
+			if pool.Model == name {
+				for _, s := range pool.Sources {
+					if s.ChannelID == channelID {
+						source = s
+						break
+					}
+				}
+				break
+			}
+		}
+		if !source.CostKnown && (a.Balance != nil || a.Budget.Unit == "usd" && a.Budget.Amount > 0) {
+			return errors.New("Configure upstream unit costs before testing a monetary-limited account")
+		}
+		return reserveUpstream(c, p, a, source, time.Now())
+	}
+	return nil
 }
 
 func RecoverUpstreamScope(scope string, resetBudget bool) error {

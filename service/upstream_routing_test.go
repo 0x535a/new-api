@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
@@ -22,6 +23,7 @@ import (
 
 func upstreamFixture(t *testing.T) (dto.UpstreamRoutingConfig, func(string) *gin.Context) {
 	t.Helper()
+	require.NoError(t, i18n.Init())
 	oldDB, oldCache := model.DB, common.MemoryCacheEnabled
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -50,6 +52,7 @@ func upstreamFixture(t *testing.T) (dto.UpstreamRoutingConfig, func(string) *gin
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"max_tokens":8}`))
 		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Header.Set("Accept-Language", "en")
 		t.Cleanup(func() { CloseUpstreamRequest(c); common.CleanupBodyStorage(c) })
 		return c
 	}
@@ -150,4 +153,71 @@ func TestUpstreamBudgetAndPendingModels(t *testing.T) {
 	_, _, handled, err := SelectUpstreamChannel(&RetryParam{Ctx: gpt, ModelName: "gpt-6-sol"}, nil)
 	require.NoError(t, err)
 	assert.False(t, handled)
+}
+
+func TestUpstreamRecoveryPreservesManualDisableAndKillSwitch(t *testing.T) {
+	cfg, ctx := upstreamFixture(t)
+	c := ctx("test-model")
+	_, err := selectUpstreamTest(c, "test-model")
+	require.NoError(t, err)
+	invalid := types.NewErrorWithStatusCode(errors.New("invalid_api_key"), types.ErrorCodeBadResponseStatusCode, 401)
+	FinishUpstreamAttempt(c, invalid, false)
+	assert.Equal(t, "invalid_credentials", upstreamStateTest(t, "account:a").Paused)
+	// Pausing one credential also protects sibling channels, but not account B.
+	next := ctx("test-model")
+	ch, err := selectUpstreamTest(next, "test-model")
+	require.NoError(t, err)
+	assert.Equal(t, 3, ch.Id)
+	FinishUpstreamAttempt(next, nil, true)
+	require.NoError(t, model.DB.Model(&model.Channel{}).Where("id IN ?", []int{1, 2}).Update("status", common.ChannelStatusManuallyDisabled).Error)
+	model.InitChannelCache()
+	require.NoError(t, RecoverUpstreamScope("account:a", false))
+	ch, err = selectUpstreamTest(ctx("test-model"), "test-model")
+	require.NoError(t, err)
+	assert.Equal(t, 3, ch.Id)
+	var disabled model.Channel
+	require.NoError(t, model.DB.First(&disabled, 1).Error)
+	assert.Equal(t, common.ChannelStatusManuallyDisabled, disabled.Status)
+	cfg.Enabled = false
+	_, err = model.SaveUpstreamRoutingConfig(cfg)
+	require.NoError(t, err)
+	_, _, handled, err := SelectUpstreamChannel(&RetryParam{Ctx: ctx("test-model"), ModelName: "test-model", TokenGroup: "default"}, nil)
+	require.NoError(t, err)
+	assert.False(t, handled)
+}
+
+func TestUpstreamExplicitProbeSharesLimitsWithoutEnablingSource(t *testing.T) {
+	cfg, ctx := upstreamFixture(t)
+	cfg.Models[0].Sources[0].Enabled = false
+	cfg.Models[0].Sources[0].Verified = false
+	_, err := model.SaveUpstreamRoutingConfig(cfg)
+	require.NoError(t, err)
+	probe := ctx("test-model")
+	require.NoError(t, ReserveUpstreamProbe(probe, 1, "test-model"))
+	_, err = selectUpstreamTest(ctx("other-model"), "other-model")
+	require.Error(t, err)
+	FinishUpstreamAttempt(probe, nil, true)
+	saved, err := model.ReadUpstreamRoutingConfig()
+	require.NoError(t, err)
+	assert.False(t, saved.Models[0].Sources[0].Enabled)
+	assert.False(t, saved.Models[0].Sources[0].Verified)
+}
+
+func TestUpstreamAliasesCannotBypassModelCapacity(t *testing.T) {
+	cfg, ctx := upstreamFixture(t)
+	cfg.Accounts[0].Limits = dto.UpstreamLimits{}
+	cfg.Models[0].Sources[0].Limits.Concurrency = 1
+	cfg.Models = append(cfg.Models, dto.UpstreamModelPool{Model: "alias-model", Enabled: true, Sources: []dto.UpstreamSource{{ChannelID: 1, Model: "test-model", Enabled: true, Verified: true, Weight: 1}}})
+	_, err := model.SaveUpstreamRoutingConfig(cfg)
+	require.NoError(t, err)
+	first := ctx("test-model")
+	ch, err := selectUpstreamTest(first, "test-model")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ch.Id)
+	_, err = selectUpstreamTest(ctx("alias-model"), "alias-model")
+	require.Error(t, err)
+	FinishUpstreamAttempt(first, nil, true)
+	ch, err = selectUpstreamTest(ctx("alias-model"), "alias-model")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ch.Id)
 }

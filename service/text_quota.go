@@ -558,7 +558,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	})
 	relayInfo.PerformanceOutputTokens = int64(summary.CompletionTokens)
 	if originUsage != nil && (originUsage.BillingUsage == nil || !originUsage.BillingUsage.Estimated) {
-		ctx.Set("upstream_usage_input", int64(originUsage.PromptTokens))
+		input := int64(originUsage.PromptTokens)
+		if usageSemanticFromUsage(relayInfo, originUsage) == "anthropic" {
+			input += int64(originUsage.PromptTokensDetails.CachedTokens) + int64(originUsage.PromptTokensDetails.CacheCreationTokensTotal())
+		}
+		ctx.Set("upstream_usage_input", input)
 		ctx.Set("upstream_usage_output", int64(originUsage.CompletionTokens))
 	}
 }

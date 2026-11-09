@@ -70,7 +70,7 @@ func resolveChannelTestUserID(c *gin.Context) (int, error) {
 	return rootUser.Id, nil
 }
 
-func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) (outcome testResult) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -93,6 +93,13 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	defer func() {
+		apiErr := outcome.newAPIError
+		if value, ok := c.Get("upstream_probe_error"); ok {
+			apiErr, _ = value.(*types.NewAPIError)
+		}
+		service.FinishUpstreamAttempt(c, apiErr, outcome.localErr == nil && apiErr == nil)
+	}()
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
@@ -434,6 +441,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 
 	requestBody := bytes.NewBuffer(jsonData)
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+	if capacityErr := service.ReserveUpstreamProbe(c, channel.Id, info.OriginModelName); capacityErr != nil {
+		return testResult{context: c, localErr: capacityErr, newAPIError: types.NewErrorWithStatusCode(capacityErr, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable)}
+	}
+	defer common.CleanupBodyStorage(c)
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
 		return testResult{
@@ -447,6 +458,7 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 		httpResp = resp.(*http.Response)
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
+			c.Set("upstream_probe_error", err)
 			common.SysError(common.LogText(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
 				channel.Id,
@@ -479,6 +491,10 @@ func testChannel(ctx context.Context, channel *model.Channel, testUserID int, te
 			localErr:    usageErr,
 			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
+	}
+	if usage != nil && (usage.BillingUsage == nil || !usage.BillingUsage.Estimated) {
+		c.Set("upstream_usage_input", int64(usage.PromptTokens))
+		c.Set("upstream_usage_output", int64(usage.CompletionTokens))
 	}
 	result := w.Result()
 	respBody, err := readTestResponseBody(result.Body, isStream)

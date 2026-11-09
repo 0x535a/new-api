@@ -91,3 +91,10 @@ channel.upstream_update_added_models: "Added model examples (showing {{.Shown}}/
 channel.upstream_update_removed_models: "Removed model examples (showing {{.Shown}}/{{.Total}}): {{.Models}}"
 channel.upstream_update_failed_channels: "Failed channel IDs (showing {{.Shown}}/{{.Total}}): {{.Ids}}"
 channel.upstream_update_more_omitted: " ({{.Count}} more omitted)"
+
+# Upstream account capacity
+upstream_routing.state_unavailable: "Upstream routing state is unavailable"
+upstream_routing.active_attempt: "The previous upstream attempt is still active"
+upstream_routing.attempt_budget_exhausted: "The upstream attempt limit was reached"
+upstream_routing.pending_model: "This model is pending upstream verification"
+upstream_routing.capacity_unavailable: "No verified upstream source has available capacity"

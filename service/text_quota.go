@@ -557,4 +557,8 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:            other,
 	})
 	relayInfo.PerformanceOutputTokens = int64(summary.CompletionTokens)
+	if originUsage != nil && (originUsage.BillingUsage == nil || !originUsage.BillingUsage.Estimated) {
+		ctx.Set("upstream_usage_input", int64(originUsage.PromptTokens))
+		ctx.Set("upstream_usage_output", int64(originUsage.CompletionTokens))
+	}
 }

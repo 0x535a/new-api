@@ -240,6 +240,7 @@ func (s *responsesWSSession) runRequest(state *responsesWSCallState, message []b
 
 func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState, create responsesWSCreateRequest) (apiErr *types.NewAPIError) {
 	policy := service.RequestPolicy(c)
+	defer service.CloseUpstreamRequest(c)
 	modelName := create.Request.Model
 	started := time.Now()
 	var info *relaycommon.RelayInfo
@@ -252,6 +253,8 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 		if info == nil && modelName != "" {
 			info = &relaycommon.RelayInfo{OriginModelName: modelName, UsingGroup: common.GetContextKeyString(c, appconstant.ContextKeyUsingGroup), StartTime: started}
 		}
+		upstreamSuccess := apiErr == nil && info != nil && info.StreamStatus != nil && info.StreamStatus.IsNormalEnd() && !info.StreamStatus.HasErrors()
+		service.FinishUpstreamAttempt(c, apiErr, upstreamSuccess)
 		perfmetrics.RecordRelayResult(c.Request.Context(), info, apiErr)
 		// Settlement already marks the request policy successful, and nothing
 		// reads a termination decision after this point on the WebSocket path,
@@ -330,6 +333,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				apiErr = service.NormalizeViolationFeeError(types.NewError(dialErr, types.ErrorCodeDoRequestFailed))
 				service.ResetStatusCode(apiErr, c.GetString("status_code_mapping"))
 				info.LastError = apiErr
+				service.FinishUpstreamAttempt(c, apiErr, false)
 				decision := service.DecideRelayRetry(c, apiErr, common.RetryTimes-retry.GetRetry())
 				service.RecordPolicyFailure(c, channel.Id, apiErr, decision)
 				service.ProcessChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, info.ApiKey, channel.GetAutoBan()), apiErr, info)
@@ -599,6 +603,9 @@ func (s *responsesWSSession) restoreConnectionContext(c *gin.Context, model stri
 		if !appmodel.IsChannelEnabledForGroupModel(group, model, s.lockedChannelID) {
 			return types.NewErrorWithStatusCode(errors.New("the connection channel is no longer allowed for this group and model"), types.ErrorCodeAccessDenied, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 		}
+	}
+	if _, _, handled, capacityErr := service.SelectUpstreamChannel(&service.RetryParam{Ctx: c, TokenGroup: s.lockedGroup, ModelName: model, RequestPath: c.Request.URL.Path}, channel); handled && capacityErr != nil {
+		return types.NewErrorWithStatusCode(capacityErr, types.ErrorCodeGetChannelFailed, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 	}
 	for key, value := range s.lockedContext {
 		c.Set(string(key), value)

@@ -30,11 +30,13 @@ type UpstreamAccount struct {
 
 type UpstreamSource struct {
 	ChannelID           int            `json:"channel_id"`
+	Model               string         `json:"model"` // Optional exposed name on this channel.
 	Enabled             bool           `json:"enabled"`
 	Verified            bool           `json:"verified"`
 	Priority            int            `json:"priority"`
 	Weight              int            `json:"weight"`
 	CostTier            int            `json:"cost_tier"`
+	CostKnown           bool           `json:"cost_known"`
 	Limits              UpstreamLimits `json:"limits"`
 	InputUSDPerMillion  float64        `json:"input_usd_per_million"`
 	OutputUSDPerMillion float64        `json:"output_usd_per_million"`

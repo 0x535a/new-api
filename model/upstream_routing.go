@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql/driver"
 	"errors"
 	"fmt"
 	"math"
@@ -14,14 +15,38 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 // Routing records keep configuration and capacity reservations separate from
 // channel status and user accounting. TEXT is portable to all supported DBs.
 type UpstreamRoutingRecord struct {
-	Scope     string `json:"scope" gorm:"type:varchar(191);primaryKey"`
-	Document  string `json:"document" gorm:"type:text;not null"`
-	UpdatedAt int64  `json:"updated_at"`
+	Scope     string                  `json:"scope" gorm:"type:varchar(191);primaryKey"`
+	Document  UpstreamRoutingDocument `json:"document" gorm:"not null"`
+	UpdatedAt int64                   `json:"updated_at"`
+}
+
+// MySQL TEXT is limited to 64 KiB, too small for a model directory.
+type UpstreamRoutingDocument string
+
+func (UpstreamRoutingDocument) GormDataType() string { return "text" }
+func (UpstreamRoutingDocument) GormDBDataType(db *gorm.DB, _ *schema.Field) string {
+	if db.Dialector.Name() == "mysql" {
+		return "LONGTEXT"
+	}
+	return "TEXT"
+}
+func (d UpstreamRoutingDocument) Value() (driver.Value, error) { return string(d), nil }
+func (d *UpstreamRoutingDocument) Scan(v any) error {
+	switch x := v.(type) {
+	case string:
+		*d = UpstreamRoutingDocument(x)
+	case []byte:
+		*d = UpstreamRoutingDocument(x)
+	default:
+		return errors.New("Invalid upstream routing document")
+	}
+	return nil
 }
 
 var upstreamRoutingMutex sync.Mutex
@@ -49,7 +74,7 @@ func ReadUpstreamRoutingConfig() (dto.UpstreamRoutingConfig, error) {
 	if err != nil {
 		return cfg, err
 	}
-	err = common.UnmarshalJsonStr(row.Document, &cfg)
+	err = common.UnmarshalJsonStr(string(row.Document), &cfg)
 	return cfg, err
 }
 
@@ -114,6 +139,9 @@ func ValidateUpstreamRoutingConfig(cfg dto.UpstreamRoutingConfig) error {
 		models[p.Model] = true
 		seen := map[int]bool{}
 		for _, s := range p.Sources {
+			if len(s.Model) > 255 || IsUnmanagedGPTModel(s.Model) {
+				return errors.New("Invalid source model")
+			}
 			if channels[s.ChannelID] == "" || seen[s.ChannelID] || s.Priority < 0 || s.Priority > 100000 || s.Weight < 1 || s.Weight > 100000 || s.CostTier < 0 || s.CostTier > 1000 {
 				return errors.New("Invalid model source, weight, priority, or account")
 			}
@@ -127,7 +155,7 @@ func ValidateUpstreamRoutingConfig(cfg dto.UpstreamRoutingConfig) error {
 				}
 			}
 			for _, a := range cfg.Accounts {
-				if slices.Contains(a.ChannelIDs, s.ChannelID) && (a.Budget.Unit == "usd" && a.Budget.Amount > 0 || a.Balance != nil) && s.InputUSDPerMillion == 0 && s.OutputUSDPerMillion == 0 && s.RequestUSD == 0 {
+				if slices.Contains(a.ChannelIDs, s.ChannelID) && (a.Budget.Unit == "usd" && a.Budget.Amount > 0 || a.Balance != nil) && !s.CostKnown {
 					return errors.New("Monetary limits require explicit upstream unit costs")
 				}
 			}
@@ -181,7 +209,7 @@ func SaveUpstreamRoutingConfig(cfg dto.UpstreamRoutingConfig) (dto.UpstreamRouti
 	}
 	err := UpdateUpstreamRoutingRecords([]string{"config"}, func(rows map[string]*UpstreamRoutingRecord) error {
 		current := DefaultUpstreamRoutingConfig()
-		if err := common.UnmarshalJsonStr(rows["config"].Document, &current); err != nil {
+		if err := common.UnmarshalJsonStr(string(rows["config"].Document), &current); err != nil {
 			return err
 		}
 		if current.Revision != cfg.Revision {
@@ -189,7 +217,7 @@ func SaveUpstreamRoutingConfig(cfg dto.UpstreamRoutingConfig) (dto.UpstreamRouti
 		}
 		cfg.Revision++
 		b, err := common.Marshal(cfg)
-		rows["config"].Document = string(b)
+		rows["config"].Document = UpstreamRoutingDocument(b)
 		return err
 	})
 	return cfg, err

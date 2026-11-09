@@ -33,6 +33,8 @@ type ModelRequest struct {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		defer service.CloseUpstreamRequest(c)
+
 		var channel *model.Channel
 		defer func() {
 			if c.Writer.Status() >= 400 {
@@ -107,7 +109,16 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 			}
-			if channel == nil {
+			if channel != nil {
+				chosen, _, handled, capacityErr := service.SelectUpstreamChannel(&service.RetryParam{Ctx: c, ModelName: modelRequest.Model, TokenGroup: usingGroup, RequestPath: c.Request.URL.Path}, channel)
+				if handled {
+					channel = chosen
+					if capacityErr != nil {
+						selectErr = &service.ChannelSelectError{StatusCode: http.StatusServiceUnavailable, Message: capacityErr.Error()}
+					}
+				}
+			}
+			if channel == nil && selectErr == nil {
 				channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, &service.RetryParam{
 					Ctx:         c,
 					ModelName:   modelRequest.Model,

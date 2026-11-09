@@ -215,11 +215,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 
 		if newAPIError == nil {
+			service.FinishUpstreamAttempt(c, nil, relayInfo.StreamStatus == nil || relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors())
 			service.MarkRequestPolicySuccess(c, relayInfo.StreamStatus)
 			relayInfo.LastError = nil
 			return
 		}
 
+		service.FinishUpstreamAttempt(c, newAPIError, false)
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
@@ -589,11 +591,13 @@ func executeTaskSubmissionWith(
 			break
 		}
 		if taskErr == nil {
+			service.FinishUpstreamAttempt(c, nil, true)
 			diagnostics.attemptSucceeded(retryParam.GetRetry()+1, result)
 			break
 		}
 
 		taskAPIError := taskSubmissionAPIError(taskErr)
+		service.FinishUpstreamAttempt(c, taskAPIError, false)
 		relayInfo.LastError = taskAPIError
 		decision := decideTaskRetry(c, taskErr, common.RetryTimes-retryParam.GetRetry())
 		service.RecordPolicyFailure(c, channel.Id, taskAPIError, decision)
@@ -856,6 +860,11 @@ func taskSubmissionAPIError(taskErr *taskdto.TaskError) *types.NewAPIError {
 // decideTaskRetry is the single retry decision for task submissions. The
 // reason is recorded in the request policy decision events of the log details.
 func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int) service.PolicyDecision {
+	if taskErr != nil && !taskErr.NoRetry && !taskErr.LocalError {
+		if decision, handled := service.UpstreamRetryDecision(c, taskSubmissionAPIError(taskErr)); handled {
+			return decision
+		}
+	}
 	stop := service.PolicyDecision{Action: "stop", Source: "system"}
 	retry := service.PolicyDecision{Action: "retry", Reason: "retry_status_matched", Source: "system"}
 	switch {

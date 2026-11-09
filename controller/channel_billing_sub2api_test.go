@@ -27,7 +27,7 @@ func setupSub2APIBalanceTest(t *testing.T) {
 	sqlDB, err := database.DB()
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
-	require.NoError(t, database.AutoMigrate(&model.Channel{}))
+	require.NoError(t, database.AutoMigrate(&model.UpstreamRoutingRecord{}, &model.Channel{}))
 	model.DB = database
 	t.Cleanup(func() {
 		model.DB = originalDB

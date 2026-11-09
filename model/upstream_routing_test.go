@@ -3,6 +3,7 @@ package model
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -62,6 +63,10 @@ func TestUpstreamRoutingDatabaseMatrix(t *testing.T) {
 			for range 2 {
 				require.NoError(t, db.AutoMigrate(&UpstreamRoutingRecord{}))
 			}
+			require.NoError(t, db.Create(&UpstreamRoutingRecord{Scope: "large-directory", Document: UpstreamRoutingDocument(strings.Repeat("x", 100000))}).Error)
+			var large UpstreamRoutingRecord
+			require.NoError(t, db.First(&large, "scope = ?", "large-directory").Error)
+			assert.Len(t, large.Document, 100000)
 			var restored Channel
 			require.NoError(t, db.First(&restored, 1).Error)
 			assert.Equal(t, "test-key", restored.Key)
@@ -99,10 +104,10 @@ func TestUpstreamRoutingDatabaseMatrix(t *testing.T) {
 			assert.ErrorIs(t, err, failure)
 			var row UpstreamRoutingRecord
 			require.NoError(t, db.First(&row, "scope = ?", "account:a").Error)
-			assert.JSONEq(t, `{"requests":1}`, row.Document)
+			assert.JSONEq(t, `{"requests":1}`, string(row.Document))
 			require.NoError(t, db.AutoMigrate(&UpstreamRoutingRecord{}))
 			require.NoError(t, db.First(&row, "scope = ?", "account:a").Error)
-			assert.JSONEq(t, `{"requests":1}`, row.Document)
+			assert.JSONEq(t, `{"requests":1}`, string(row.Document))
 		})
 	}
 }

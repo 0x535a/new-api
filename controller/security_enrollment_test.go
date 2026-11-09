@@ -1044,7 +1044,7 @@ func TestSecurityEnrollmentPasskeyProofProtectsChannelKeyRead(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	require.NoError(t, model.DB.Model(user).Update("role", common.RoleRootUser).Error)
 	require.NoError(t, model.PublishUserAuthCache(user.Id))
-	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.UpstreamRoutingRecord{}, &model.Channel{}))
 	for _, channel := range []model.Channel{
 		{Id: 123, Name: "first", Key: "first-channel-secret", Type: 1, Status: 1},
 		{Id: 456, Name: "second", Key: "second-channel-secret", Type: 1, Status: 1},
@@ -1776,7 +1776,7 @@ func TestSecurityEnrollmentNeverTrustsSessionForFirstFactor(t *testing.T) {
 
 func TestSecurityEnrollmentMissingTargetsAreBusinessErrors(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
-	require.NoError(t, model.DB.AutoMigrate(&model.Channel{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.UpstreamRoutingRecord{}, &model.Channel{}))
 	for _, target := range []struct {
 		path, message string
 		handler       gin.HandlerFunc

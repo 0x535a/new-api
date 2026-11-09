@@ -92,7 +92,7 @@ func upstreamPolicy(c *gin.Context, name string) (*upstreamRequest, error) {
 	}
 	cfg, err := model.ReadUpstreamRoutingConfig()
 	if err != nil {
-		return nil, errors.New(i18n.T(c, "upstream_routing.state_unavailable"))
+		return nil, errors.New(i18n.T(c, i18n.MsgUpstreamRoutingStateUnavailable))
 	}
 	p.Config, p.Managed = cfg, cfg.Enabled
 	c.Set(upstreamRequestKey, p)
@@ -346,10 +346,10 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		return nil, "", false, nil
 	}
 	if p.Current != nil {
-		return forced, "", true, errors.New(i18n.T(c, "upstream_routing.active_attempt"))
+		return forced, "", true, errors.New(i18n.T(c, i18n.MsgUpstreamRoutingActiveAttempt))
 	}
 	if p.Attempts >= p.Config.MaxAttempts {
-		return nil, "", true, errors.New(i18n.T(c, "upstream_routing.attempt_budget_exhausted"))
+		return nil, "", true, errors.New(i18n.T(c, i18n.MsgUpstreamRoutingAttemptBudgetExhausted))
 	}
 	var pool *dto.UpstreamModelPool
 	for i := range p.Config.Models {
@@ -359,7 +359,7 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		}
 	}
 	if pool == nil || !pool.Enabled {
-		return nil, "", true, errors.New(i18n.T(c, "upstream_routing.pending_model"))
+		return nil, "", true, errors.New(i18n.T(c, i18n.MsgUpstreamRoutingPendingModel))
 	}
 	pinned := 0
 	if pin, ok, _ := GetChannelConstraints(c).ResolvedPin(); ok {
@@ -475,7 +475,7 @@ func SelectUpstreamChannel(param *RetryParam, forced *model.Channel) (*model.Cha
 		RequestPolicy(c).AddEvent(PolicyEvent{ChannelID: candidate.channel.Id, Decision: PolicyDecision{Action: "select", Reason: "upstream_capacity_reserved", Source: "upstream_routing"}})
 		return candidate.channel, candidate.group, true, nil
 	}
-	return nil, "", true, errors.New(i18n.T(c, "upstream_routing.capacity_unavailable"))
+	return nil, "", true, errors.New(i18n.T(c, i18n.MsgUpstreamRoutingCapacityUnavailable))
 }
 
 func upstreamFailure(err *types.NewAPIError) (string, bool) {
@@ -531,7 +531,7 @@ func FinishUpstreamAttempt(c *gin.Context, apiErr *types.NewAPIError, success bo
 	at.Once.Do(func() { close(at.Stop) })
 	now := time.Now()
 	if !success && apiErr == nil && at.Sent && c.Request.Context().Err() == nil {
-		apiErr = types.NewErrorWithStatusCode(errors.New("upstream stream did not complete"), types.ErrorCodeBadResponse, 502)
+		apiErr = types.NewErrorWithStatusCode(errors.New(i18n.T(c, i18n.MsgUpstreamRoutingStreamIncomplete)), types.ErrorCodeBadResponse, 502)
 	}
 	reason, accountFault := upstreamFailure(apiErr)
 	input, inputOK := c.Get("upstream_usage_input")

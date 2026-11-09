@@ -26,7 +26,9 @@ export function SourceDialog(props: {
 }) {
   const { t } = useTranslation()
   const form = useForm<UpstreamSource>({
-    resolver: zodResolver(sourceSchema),
+    resolver: zodResolver(sourceSchema, {
+      error: () => 'Enter a valid value within the allowed range',
+    }),
     defaultValues: props.source,
   })
   const submit = form.handleSubmit(props.onSave)

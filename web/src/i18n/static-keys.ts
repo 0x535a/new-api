@@ -1049,4 +1049,8 @@ export const STATIC_I18N_KEYS = [
   'Channel priorities changed. Refresh and try again.',
   'Invalid channel priority move',
   'Channel priority is outside the sortable range',
+  // Upstream routing dynamic field labels and API validation messages.
+  'Reserve exceeds budget',
+  'Enter a valid value within the allowed range',
+  'Configure upstream unit costs before testing a monetary-limited account',
 ] as const

@@ -29,7 +29,9 @@ export function AccountDialog(props: {
 }) {
   const { t } = useTranslation()
   const form = useForm<UpstreamAccount>({
-    resolver: zodResolver(accountSchema),
+    resolver: zodResolver(accountSchema, {
+      error: () => 'Enter a valid value within the allowed range',
+    }),
     defaultValues: props.account,
   })
   const submit = form.handleSubmit((value) => {

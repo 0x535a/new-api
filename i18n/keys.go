@@ -115,3 +115,13 @@ const (
 	MsgChannelUpstreamUpdateFailedChannels  = "channel.upstream_update_failed_channels"
 	MsgChannelUpstreamUpdateMoreOmitted     = "channel.upstream_update_more_omitted"
 )
+
+// Upstream routing errors returned to API clients.
+const (
+	MsgUpstreamRoutingStateUnavailable       = "upstream_routing.state_unavailable"
+	MsgUpstreamRoutingActiveAttempt          = "upstream_routing.active_attempt"
+	MsgUpstreamRoutingAttemptBudgetExhausted = "upstream_routing.attempt_budget_exhausted"
+	MsgUpstreamRoutingPendingModel           = "upstream_routing.pending_model"
+	MsgUpstreamRoutingCapacityUnavailable    = "upstream_routing.capacity_unavailable"
+	MsgUpstreamRoutingStreamIncomplete       = "upstream_routing.stream_incomplete"
+)
